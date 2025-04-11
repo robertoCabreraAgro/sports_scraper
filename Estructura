@@ -1,0 +1,9 @@
+/sports_scraper
+    /app
+        /__init__.py
+        /models.py
+        /scraper.py
+        /routes.py
+    /config.py
+    /requirements.txt
+    /run.py
