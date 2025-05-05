@@ -5,11 +5,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
-    """Configuración de la aplicación"""
-    # Configuración de la base de datos SQLite por defecto
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///sports_data.db'
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        'DATABASE_URL',
+        'postgresql://roob:roob1128@localhost:5432/dataDB'
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-key-muy-secreta'
+
     
     # URL base para el scraping
     FOOTBALL_URL = os.environ.get('FOOTBALL_URL') or 'https://livescore.football-data.co.uk/'
