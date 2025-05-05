@@ -1,47 +1,35 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from config import Config
-import logging
-import os
+from flask_migrate import Migrate
+from config import config
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Inicializar SQLAlchemy
+# Inicializar extensiones
 db = SQLAlchemy()
+migrate = Migrate()
 
-def create_app(config_class=Config):
+def create_app(config_name='default'):
     """
-    Crea y configura la aplicación Flask.
+    Función factory para crear la aplicación Flask.
     
     Args:
-        config_class: Clase de configuración a utilizar.
-        
+        config_name: Nombre de la configuración a utilizar (default, development, testing, production)
+    
     Returns:
-        app: Aplicación Flask configurada.
+        Aplicación Flask configurada
     """
+    # Crear instancia de aplicación Flask
     app = Flask(__name__)
-    app.config.from_object(config_class)
     
-    # Inicializar extensiones
+    # Aplicar configuración
+    app.config.from_object(config[config_name])
+    config[config_name].init_app(app)
+    
+    # Inicializar extensiones con la aplicación
     db.init_app(app)
+    migrate.init_app(app, db)
     
-    # Importar y registrar Blueprints
-    from app.routes import scraper_bp, api_bp, main_bp
-    app.register_blueprint(scraper_bp)
-    app.register_blueprint(api_bp)
+    # Registrar blueprints
+    from app.views import main_bp
     app.register_blueprint(main_bp)
-    
-    # Crear la base de datos si no existe
-    with app.app_context():
-        try:
-            db.create_all()
-            logger.info("Base de datos creada correctamente.")
-        except Exception as e:
-            logger.error(f"Error al crear la base de datos: {str(e)}")
     
     return app
