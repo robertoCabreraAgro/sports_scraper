@@ -1,308 +1,213 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
-from app import db
-from app.models import PartidoFutbol, PartidoTenis, PartidoBaloncesto
-from config import Config
 import logging
+import time
+from datetime import datetime
 
-# Configurar logging
-logging.basicConfig(level=logging.INFO)
+# Configuración de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("scraper.log"),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
-def realizar_scraping_futbol():
+class TennisScraper:
     """
-    Realiza scraping de la página web de fútbol y guarda los datos en la base de datos.
+    Clase para manejar el scraping de datos de partidos de tenis.
+    """
+    def __init__(self, url):
+        """
+        Inicializa el scraper con la URL de la página de tenis.
+        
+        Args:
+            url: URL de la página de tenis a scrapear
+        """
+        self.url = url
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
     
-    Returns:
-        dict: Mensaje de resultado y número de partidos procesados
-    """
-    try:
-        url = Config.FOOTBALL_URL
-        logger.info(f"Iniciando scraping de fútbol desde: {url}")
+    def _get_page_content(self):
+        """
+        Realiza la petición HTTP y obtiene el contenido de la página.
         
-        # Hacer la solicitud HTTP
-        response = requests.get(url)
-        response.raise_for_status()  # Lanzar excepción si hay error HTTP
+        Returns:
+            Contenido HTML de la página o None si hay un error
+        """
+        try:
+            response = requests.get(self.url, headers=self.headers)
+            response.raise_for_status()  # Lanza excepción si la petición no es exitosa
+            return response.text
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error al obtener la página: {e}")
+            return None
+    
+    def _parse_player_names(self, match_element):
+        """
+        Extrae los nombres de los jugadores de un elemento de partido.
         
-        # Parsear el HTML
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Extraer los partidos (adaptar según la estructura real de la página)
-        partidos = soup.find_all('div', class_='partido')
-        
-        # Contador de partidos procesados
-        contador = 0
-        
-        for partido in partidos:
-            try:
-                # Extracción de datos (adaptar a la estructura real)
-                competencia = partido.find('h2').text.strip()
-                equipos = partido.find_all('span', class_='equipo')
-                goles = partido.find_all('span', class_='goles')
-                hora = partido.find('span', class_='hora').text.strip()
-                
-                # URL para detalles del partido (opcional)
-                url_detalles = None
-                link = partido.find('a')
-                if link and link.get('href'):
-                    url_detalles = link['href']
-                    if not url_detalles.startswith('http'):
-                        url_detalles = f"{Config.FOOTBALL_URL.rstrip('/')}/{url_detalles.lstrip('/')}"
-                
-                # Extraemos la información de los equipos y los goles
-                equipo_local = equipos[0].text.strip() if len(equipos) > 0 else "Desconocido"
-                equipo_visitante = equipos[1].text.strip() if len(equipos) > 1 else "Desconocido"
-                goles_local = int(goles[0].text.strip()) if len(goles) > 0 else 0
-                goles_visitante = int(goles[1].text.strip()) if len(goles) > 1 else 0
-                
-                # Verificar si el partido ya existe en la base de datos
-                partido_existente = PartidoFutbol.query.filter_by(
-                    competencia=competencia,
-                    equipo_local=equipo_local,
-                    equipo_visitante=equipo_visitante,
-                    hora=hora
-                ).first()
-                
-                if not partido_existente:
-                    # Guardar los datos en la base de datos
-                    nuevo_partido = PartidoFutbol(
-                        competencia=competencia,
-                        equipo_local=equipo_local,
-                        equipo_visitante=equipo_visitante,
-                        goles_local=goles_local,
-                        goles_visitante=goles_visitante,
-                        hora=hora,
-                        url_detalles=url_detalles
-                    )
-                    db.session.add(nuevo_partido)
-                    contador += 1
-                else:
-                    # Actualizar partido existente si hay cambios
-                    if (partido_existente.goles_local != goles_local or 
-                        partido_existente.goles_visitante != goles_visitante or
-                        partido_existente.url_detalles != url_detalles):
-                        partido_existente.goles_local = goles_local
-                        partido_existente.goles_visitante = goles_visitante
-                        partido_existente.url_detalles = url_detalles
-                        contador += 1
+        Args:
+            match_element: Elemento HTML que contiene la información del partido
             
-            except Exception as e:
-                logger.error(f"Error procesando un partido de fútbol: {str(e)}")
-                continue
+        Returns:
+            Tupla con los nombres de los jugadores (player_1, player_2)
+        """
+        try:
+            # Esta implementación es genérica y debe adaptarse a la estructura real de la página
+            players = match_element.select('.player-name')
+            player_1 = players[0].text.strip() if len(players) > 0 else "Unknown"
+            player_2 = players[1].text.strip() if len(players) > 1 else "Unknown"
+            return player_1, player_2
+        except Exception as e:
+            logger.error(f"Error al extraer nombres de jugadores: {e}")
+            return "Unknown", "Unknown"
+    
+    def _parse_scores(self, match_element):
+        """
+        Extrae las puntuaciones de un elemento de partido.
         
-        # Guardar todos los cambios
-        db.session.commit()
+        Args:
+            match_element: Elemento HTML que contiene la información del partido
+            
+        Returns:
+            Tupla con las puntuaciones (score_1, score_2, score_total)
+        """
+        try:
+            # Esta implementación es genérica y debe adaptarse a la estructura real de la página
+            scores = match_element.select('.score')
+            score_1 = scores[0].text.strip() if len(scores) > 0 else "0"
+            score_2 = scores[1].text.strip() if len(scores) > 1 else "0"
+            
+            # Calcular el puntaje total (puede variar según cómo se calcule en el tenis)
+            try:
+                score_total = str(int(score_1) + int(score_2))
+            except ValueError:
+                # Si los scores no son números enteros simples
+                score_total = f"{score_1}-{score_2}"
+                
+            return score_1, score_2, score_total
+        except Exception as e:
+            logger.error(f"Error al extraer puntuaciones: {e}")
+            return "0", "0", "0"
+    
+    def _parse_tournament(self, match_element):
+        """
+        Extrae el nombre del torneo de un elemento de partido.
         
-        return {
-            "status": "success",
-            "message": f"Scraping completado. Se procesaron {contador} partidos de fútbol.",
-            "count": contador
-        }
+        Args:
+            match_element: Elemento HTML que contiene la información del partido
+            
+        Returns:
+            Nombre del torneo
+        """
+        try:
+            # Esta implementación es genérica y debe adaptarse a la estructura real de la página
+            tournament_element = match_element.select_one('.tournament-name')
+            return tournament_element.text.strip() if tournament_element else "Unknown Tournament"
+        except Exception as e:
+            logger.error(f"Error al extraer nombre del torneo: {e}")
+            return "Unknown Tournament"
+    
+    def _parse_timestamp(self, match_element):
+        """
+        Extrae la fecha y hora del partido.
         
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Error en el scraping de fútbol: {str(e)}")
-        return {
-            "status": "error",
-            "message": f"Error en el scraping: {str(e)}",
-            "count": 0
-        }
+        Args:
+            match_element: Elemento HTML que contiene la información del partido
+            
+        Returns:
+            Fecha y hora del partido en formato string
+        """
+        try:
+            # Esta implementación es genérica y debe adaptarse a la estructura real de la página
+            time_element = match_element.select_one('.match-time')
+            return time_element.text.strip() if time_element else datetime.now().strftime("%Y-%m-%d %H:%M")
+        except Exception as e:
+            logger.error(f"Error al extraer timestamp: {e}")
+            return datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    def scrape_matches(self):
+        """
+        Realiza el scraping de los partidos de tenis.
+        
+        Returns:
+            Lista de diccionarios con los datos de los partidos
+        """
+        logger.info(f"Iniciando scraping en {self.url}")
+        html_content = self._get_page_content()
+        
+        if not html_content:
+            logger.error("No se pudo obtener el contenido de la página")
+            return []
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
+        matches_data = []
+        
+        try:
+            # Buscar todas las tablas o elementos que contienen partidos
+            # Esta selección debe adaptarse a la estructura real de la página
+            match_elements = soup.select('.match-container')
+            
+            logger.info(f"Se encontraron {len(match_elements)} partidos")
+            
+            for match in match_elements:
+                player_1, player_2 = self._parse_player_names(match)
+                score_1, score_2, score_total = self._parse_scores(match)
+                tournament = self._parse_tournament(match)
+                timestamp = self._parse_timestamp(match)
+                
+                match_data = {
+                    'player_1': player_1,
+                    'player_2': player_2,
+                    'score_1': score_1,
+                    'score_2': score_2,
+                    'score_total': score_total,
+                    'timestamp': timestamp,
+                    'tournament': tournament,
+                    'sport_type': 'tennis'
+                }
+                
+                matches_data.append(match_data)
+                logger.info(f"Partido procesado: {player_1} vs {player_2}")
+                
+                # Espera entre peticiones para evitar sobrecarga
+                time.sleep(0.5)
+                
+        except Exception as e:
+            logger.error(f"Error durante el scraping: {e}")
+        
+        logger.info(f"Scraping completado. Se obtuvieron {len(matches_data)} partidos")
+        return matches_data
 
-def realizar_scraping_tenis():
-    """
-    Realiza scraping de la página web de tenis y guarda los datos en la base de datos.
-    
-    Returns:
-        dict: Mensaje de resultado y número de partidos procesados
-    """
-    try:
-        url = Config.TENNIS_URL
-        logger.info(f"Iniciando scraping de tenis desde: {url}")
-        
-        # Hacer la solicitud HTTP
-        response = requests.get(url)
-        response.raise_for_status()
-        
-        # Parsear el HTML
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Extraer los partidos (adaptar según la estructura real de la página)
-        partidos = soup.find_all('div', class_='partido-tenis')
-        
-        # Contador de partidos procesados
-        contador = 0
-        
-        for partido in partidos:
-            try:
-                # Extracción de datos (adaptar a la estructura real)
-                torneo = partido.find('h2').text.strip()
-                jugadores = partido.find_all('span', class_='jugador')
-                sets = partido.find_all('span', class_='sets')
-                hora = partido.find('span', class_='hora').text.strip()
-                
-                # URL para detalles del partido (opcional)
-                url_detalles = None
-                link = partido.find('a')
-                if link and link.get('href'):
-                    url_detalles = link['href']
-                    if not url_detalles.startswith('http'):
-                        url_detalles = f"{Config.TENNIS_URL.rstrip('/')}/{url_detalles.lstrip('/')}"
-                
-                jugador1 = jugadores[0].text.strip() if len(jugadores) > 0 else "Desconocido"
-                jugador2 = jugadores[1].text.strip() if len(jugadores) > 1 else "Desconocido"
-                sets_jugador1 = int(sets[0].text.strip()) if len(sets) > 0 else 0
-                sets_jugador2 = int(sets[1].text.strip()) if len(sets) > 1 else 0
-                
-                # Verificar si el partido ya existe
-                partido_existente = PartidoTenis.query.filter_by(
-                    torneo=torneo,
-                    jugador1=jugador1,
-                    jugador2=jugador2,
-                    hora=hora
-                ).first()
-                
-                if not partido_existente:
-                    # Guardar nuevo partido
-                    nuevo_partido = PartidoTenis(
-                        torneo=torneo,
-                        jugador1=jugador1,
-                        jugador2=jugador2,
-                        sets_jugador1=sets_jugador1,
-                        sets_jugador2=sets_jugador2,
-                        hora=hora,
-                        url_detalles=url_detalles
-                    )
-                    db.session.add(nuevo_partido)
-                    contador += 1
-                else:
-                    # Actualizar partido existente si hay cambios
-                    if (partido_existente.sets_jugador1 != sets_jugador1 or 
-                        partido_existente.sets_jugador2 != sets_jugador2 or
-                        partido_existente.url_detalles != url_detalles):
-                        partido_existente.sets_jugador1 = sets_jugador1
-                        partido_existente.sets_jugador2 = sets_jugador2
-                        partido_existente.url_detalles = url_detalles
-                        contador += 1
-            
-            except Exception as e:
-                logger.error(f"Error procesando un partido de tenis: {str(e)}")
-                continue
-        
-        # Guardar todos los cambios
-        db.session.commit()
-        
-        return {
-            "status": "success",
-            "message": f"Scraping completado. Se procesaron {contador} partidos de tenis.",
-            "count": contador
-        }
-        
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Error en el scraping de tenis: {str(e)}")
-        return {
-            "status": "error",
-            "message": f"Error en el scraping: {str(e)}",
-            "count": 0
-        }
 
-def realizar_scraping_baloncesto():
+# Definimos una fábrica de scrapers para facilitar la escalabilidad a otros deportes
+class ScraperFactory:
     """
-    Realiza scraping de la página web de baloncesto y guarda los datos en la base de datos.
-    
-    Returns:
-        dict: Mensaje de resultado y número de partidos procesados
+    Fábrica para crear diferentes tipos de scrapers según el deporte.
     """
-    try:
-        url = Config.BASKETBALL_URL
-        logger.info(f"Iniciando scraping de baloncesto desde: {url}")
+    @staticmethod
+    def get_scraper(sport_type, url):
+        """
+        Devuelve el scraper adecuado según el tipo de deporte.
         
-        # Hacer la solicitud HTTP
-        response = requests.get(url)
-        response.raise_for_status()
-        
-        # Parsear el HTML
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Extraer los partidos (adaptar según la estructura real de la página)
-        partidos = soup.find_all('div', class_='partido-baloncesto')
-        
-        # Contador de partidos procesados
-        contador = 0
-        
-        for partido in partidos:
-            try:
-                # Extracción de datos (adaptar a la estructura real)
-                liga = partido.find('h2').text.strip()
-                equipos = partido.find_all('span', class_='equipo')
-                puntos = partido.find_all('span', class_='puntos')
-                hora = partido.find('span', class_='hora').text.strip()
-                
-                # URL para detalles del partido (opcional)
-                url_detalles = None
-                link = partido.find('a')
-                if link and link.get('href'):
-                    url_detalles = link['href']
-                    if not url_detalles.startswith('http'):
-                        url_detalles = f"{Config.BASKETBALL_URL.rstrip('/')}/{url_detalles.lstrip('/')}"
-                
-                equipo_local = equipos[0].text.strip() if len(equipos) > 0 else "Desconocido"
-                equipo_visitante = equipos[1].text.strip() if len(equipos) > 1 else "Desconocido"
-                puntos_local = int(puntos[0].text.strip()) if len(puntos) > 0 else 0
-                puntos_visitante = int(puntos[1].text.strip()) if len(puntos) > 1 else 0
-                
-                # Verificar si el partido ya existe
-                partido_existente = PartidoBaloncesto.query.filter_by(
-                    liga=liga,
-                    equipo_local=equipo_local,
-                    equipo_visitante=equipo_visitante,
-                    hora=hora
-                ).first()
-                
-                if not partido_existente:
-                    # Guardar nuevo partido
-                    nuevo_partido = PartidoBaloncesto(
-                        liga=liga,
-                        equipo_local=equipo_local,
-                        equipo_visitante=equipo_visitante,
-                        puntos_local=puntos_local,
-                        puntos_visitante=puntos_visitante,
-                        hora=hora,
-                        url_detalles=url_detalles
-                    )
-                    db.session.add(nuevo_partido)
-                    contador += 1
-                else:
-                    # Actualizar partido existente si hay cambios
-                    if (partido_existente.puntos_local != puntos_local or 
-                        partido_existente.puntos_visitante != puntos_visitante or
-                        partido_existente.url_detalles != url_detalles):
-                        partido_existente.puntos_local = puntos_local
-                        partido_existente.puntos_visitante = puntos_visitante
-                        partido_existente.url_detalles = url_detalles
-                        contador += 1
+        Args:
+            sport_type: Tipo de deporte ('tennis', 'basketball', 'football', etc.)
+            url: URL de la página a scrapear
             
-            except Exception as e:
-                logger.error(f"Error procesando un partido de baloncesto: {str(e)}")
-                continue
-        
-        # Guardar todos los cambios
-        db.session.commit()
-        
-        return {
-            "status": "success",
-            "message": f"Scraping completado. Se procesaron {contador} partidos de baloncesto.",
-            "count": contador
-        }
-        
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Error en el scraping de baloncesto: {str(e)}")
-        return {
-            "status": "error",
-            "message": f"Error en el scraping: {str(e)}",
-            "count": 0
-        }
-        
-        
+        Returns:
+            Instancia del scraper apropiado
+        """
+        if sport_type == 'tennis':
+            return TennisScraper(url)
+        # En el futuro, se pueden agregar más deportes
+        # elif sport_type == 'basketball':
+        #     return BasketballScraper(url)
+        # elif sport_type == 'football':
+        #     return FootballScraper(url)
+        else:
+            logger.warning(f"Tipo de deporte no soportado: {sport_type}. Usando TennisScraper como fallback.")
+            return TennisScraper(url)
